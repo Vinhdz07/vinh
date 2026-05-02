@@ -39,6 +39,13 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
+Neu may bao loi thieu `python3-venv`, ban co the cai nhanh bang cach:
+
+```bash
+python3 -m pip install --user -r requirements.txt
+cp .env.example .env
+```
+
 Sua file `.env`:
 
 ```env
