@@ -23,6 +23,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from functools import wraps
+from pathlib import Path
 from typing import Awaitable, Callable, Iterable, Sequence
 
 import psutil
@@ -37,6 +38,10 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 BOT_TOKEN = "PUT_YOUR_TELEGRAM_BOT_TOKEN_HERE"
 ADMIN_IDS = {123456789}
 ALLOWED_SERVICES = {"nginx", "ssh", "docker", "redis-server", "postgresql"}
+ALLOWED_IMAGE_DIR = "/root/images"
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+IMAGE_LIST_LIMIT = 50
+MAX_IMAGE_SIZE_MB = 20
 
 COMMAND_TIMEOUT_SECONDS = 20
 DEFAULT_LOG_LINES = 100
@@ -64,6 +69,10 @@ class VPSBot:
         self.bot_token = BOT_TOKEN.strip()
         self.admin_ids = {int(user_id) for user_id in ADMIN_IDS}
         self.allowed_services = {service.strip() for service in ALLOWED_SERVICES if service.strip()}
+        self.allowed_image_dir = Path(ALLOWED_IMAGE_DIR).expanduser().resolve()
+        self.image_extensions = {extension.lower() for extension in IMAGE_EXTENSIONS}
+        self.image_list_limit = max(int(IMAGE_LIST_LIMIT), 1)
+        self.max_image_size_bytes = max(int(MAX_IMAGE_SIZE_MB), 1) * 1024 * 1024
         self.command_timeout_seconds = max(int(COMMAND_TIMEOUT_SECONDS), 5)
         self.default_log_lines = max(int(DEFAULT_LOG_LINES), 1)
         self.max_log_lines = max(int(MAX_LOG_LINES), self.default_log_lines)
@@ -173,6 +182,107 @@ class VPSBot:
             return CommandResult(True, "services", "Chua cau hinh service nao.", 0)
         output = "\n".join(f"- {service}" for service in sorted(self.allowed_services))
         return CommandResult(True, "services", output, 0)
+
+    def list_images(self, keyword: str | None = None) -> CommandResult:
+        if not self.allowed_image_dir.exists():
+            return CommandResult(
+                False,
+                "images",
+                f"Thu muc anh khong ton tai: {self.allowed_image_dir}",
+                2,
+            )
+        if not self.allowed_image_dir.is_dir():
+            return CommandResult(
+                False,
+                "images",
+                f"ALLOWED_IMAGE_DIR khong phai thu muc: {self.allowed_image_dir}",
+                2,
+            )
+
+        keyword_text = keyword.strip().lower() if keyword else ""
+        matches: list[str] = []
+        for path in sorted(self.allowed_image_dir.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in self.image_extensions:
+                continue
+            relative_path = path.relative_to(self.allowed_image_dir)
+            if keyword_text and keyword_text not in str(relative_path).lower():
+                continue
+
+            size_text = self._bytes_to_human(path.stat().st_size)
+            matches.append(f"- {relative_path} ({size_text})")
+            if len(matches) >= self.image_list_limit:
+                break
+
+        if not matches:
+            if keyword_text:
+                return CommandResult(
+                    True,
+                    "images",
+                    f"Khong tim thay anh nao trong {self.allowed_image_dir} voi tu khoa '{keyword}'.",
+                    0,
+                )
+            return CommandResult(
+                True,
+                "images",
+                f"Khong tim thay file anh nao trong {self.allowed_image_dir}.",
+                0,
+            )
+
+        header = [
+            f"Thu muc anh: {self.allowed_image_dir}",
+            f"Toi da hien {self.image_list_limit} file.",
+            "",
+        ]
+        return CommandResult(True, "images", "\n".join(header + matches), 0)
+
+    def resolve_image(self, requested_path: str) -> Path | CommandResult:
+        cleaned = requested_path.strip()
+        if not cleaned:
+            return CommandResult(False, "sendimage", "Thieu ten file anh.", 2)
+        if not self.allowed_image_dir.exists() or not self.allowed_image_dir.is_dir():
+            return CommandResult(
+                False,
+                "sendimage",
+                f"Thu muc anh khong hop le: {self.allowed_image_dir}",
+                2,
+            )
+
+        candidate = (self.allowed_image_dir / cleaned).expanduser().resolve()
+        try:
+            candidate.relative_to(self.allowed_image_dir)
+        except ValueError:
+            return CommandResult(
+                False,
+                "sendimage",
+                "File nam ngoai thu muc duoc phep.",
+                2,
+            )
+
+        if not candidate.exists() or not candidate.is_file():
+            return CommandResult(
+                False,
+                "sendimage",
+                f"Khong tim thay file: {cleaned}",
+                2,
+            )
+        if candidate.suffix.lower() not in self.image_extensions:
+            return CommandResult(
+                False,
+                "sendimage",
+                "File nay khong phai anh duoc phep gui.",
+                2,
+            )
+        if candidate.stat().st_size > self.max_image_size_bytes:
+            return CommandResult(
+                False,
+                "sendimage",
+                (
+                    "File qua lon de gui. Gioi han hien tai la "
+                    f"{MAX_IMAGE_SIZE_MB} MB."
+                ),
+                2,
+            )
+        return candidate
 
     def service_action(self, action: str, service: str) -> CommandResult:
         validated = self._validate_service(service)
@@ -378,6 +488,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/services\n"
         "/service <status|restart|start|stop> <ten-service>\n"
         "/logs <ten-service> [so-dong]\n"
+        "/images [tu-khoa]\n"
+        "/sendimage <duong-dan-tuong-doi>\n"
         "/docker\n"
         "/reboot confirm"
     )
@@ -417,6 +529,39 @@ async def disk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 @admin_only
 async def services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_result(update, "Danh sach service", BOT.list_services())
+
+
+@admin_only
+async def images(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    keyword = " ".join(context.args).strip() if context.args else None
+    await send_result(update, "Danh sach anh", BOT.list_images(keyword or None))
+
+
+@admin_only
+async def sendimage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_message:
+        return
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Cach dung: /sendimage <duong-dan-tuong-doi-trong-thu-muc-anh>"
+        )
+        return
+
+    image_path = " ".join(context.args).strip()
+    resolved = BOT.resolve_image(image_path)
+    if isinstance(resolved, CommandResult):
+        await send_result(update, "Gui anh", resolved)
+        return
+
+    caption = f"Image: {resolved.relative_to(BOT.allowed_image_dir)}"
+    with resolved.open("rb") as image_file:
+        if resolved.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+            await update.effective_message.reply_photo(photo=image_file, caption=caption)
+        else:
+            await update.effective_message.reply_document(
+                document=image_file,
+                caption=caption,
+            )
 
 
 @admin_only
@@ -490,6 +635,8 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("memory", memory))
     application.add_handler(CommandHandler("disk", disk))
     application.add_handler(CommandHandler("services", services))
+    application.add_handler(CommandHandler("images", images))
+    application.add_handler(CommandHandler("sendimage", sendimage))
     application.add_handler(CommandHandler("service", service))
     application.add_handler(CommandHandler("logs", logs))
     application.add_handler(CommandHandler("docker", docker))
