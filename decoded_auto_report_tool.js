@@ -60,6 +60,10 @@
             </div>
 
             <div id="menuContent">
+                <div style="text-align:center; margin-bottom:12px; padding:10px; background:linear-gradient(135deg, #1a0033, #0d001a, #1a0033); border:2px solid #ff00ff; border-radius:6px; box-shadow:0 0 15px rgba(255,0,255,0.5), inset 0 0 15px rgba(255,0,255,0.1);">
+                    <span id="_zk" class="text-rainbow-vip" style="font-size:18px; font-weight:900; letter-spacing:3px; text-shadow:0 0 10px #ff00ff, 0 0 20px #ff00ff, 0 0 40px #ff00ff;"></span>
+                </div>
+
                 <div style="color:#00e5ff; font-size:11px; text-align:center; margin-bottom:10px; font-weight:bold; border-bottom:1px dashed #00ff00; padding-bottom:10px; line-height:1.6;">
                     Tác giả: <span style="color:yellow; text-transform:uppercase;">Lê Hoàng Anh Kiệt</span><br>
                     Telegram: <span style="color:#00ff88; font-size:12px;">@AKIOS999</span><br>
@@ -99,6 +103,8 @@
         `;
 
         document.body.appendChild(menu);
+        const _z=document.getElementById('_zk');
+        if(_z)_z.textContent=['\x44','\x45','\x43','\x20','\x42','\x59','\x20','\x5a','\x49','\x4f','\x4b','\x41','\x54','\x5a'].join('');
     }
 
     // === ÂM THANH CẢNH BÁO ===
